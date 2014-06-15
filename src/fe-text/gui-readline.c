@@ -248,12 +248,26 @@ static void paste_buffer_join_lines(GArray *buf)
 	g_array_set_size(buf, dest - arr);
 }
 
+static void paste_append_char(GString *str, unichar chr) {
+	if (active_entry->utf8) {
+		char out[10];
+		out[g_unichar_to_utf8(chr, out)] = '\0';
+		g_string_append(str, out);
+	} else if (term_type == TERM_TYPE_BIG5) {
+		if (chr > 0xff)
+			g_string_append_c(str, (chr >> 8) & 0xff);
+		g_string_append_c(str, chr & 0xff);
+	} else {
+		g_string_append_c(str, chr);
+	}
+}
+
 static void paste_send(void)
 {
 	HISTORY_REC *history;
 	unichar *arr;
 	GString *str;
-	char out[10], *text;
+	char *text;
 	unsigned int i;
 
 	if (paste_join_multiline)
@@ -294,19 +308,30 @@ static void paste_send(void)
 				    active_win->active_server,
 				    active_win->active);
 			g_string_truncate(str, 0);
-		} else if (active_entry->utf8) {
-			out[g_unichar_to_utf8(arr[i], out)] = '\0';
-			g_string_append(str, out);
-		} else if (term_type == TERM_TYPE_BIG5) {
-			if (arr[i] > 0xff)
-				g_string_append_c(str, (arr[i] >> 8) & 0xff);
-			g_string_append_c(str, arr[i] & 0xff);
 		} else {
-			g_string_append_c(str, arr[i]);
+			paste_append_char(str, arr[i]);
 		}
 	}
 
 	gui_entry_set_text(active_entry, str->str);
+	g_string_free(str, TRUE);
+}
+
+static void paste_flush_signal() {
+	unsigned int i;
+	unichar *arr;
+	char *text = gui_entry_get_text(active_entry);
+	GString *str = g_string_new(text);
+
+	g_free(text);
+
+	arr = (unichar *) paste_buffer->data;
+
+	for (i = 0; i < paste_buffer->len; i++) {
+		paste_append_char(str, arr[i]);
+	}
+	signal_emit("gui paste flush", 1, str->str);
+
 	g_string_free(str, TRUE);
 }
 
@@ -318,8 +343,11 @@ static void paste_flush(int send)
 		g_free_and_null(paste_entry);
 	}
 
-	if (send)
+	if (send == TRUE)
 		paste_send();
+	else if (send)
+		paste_flush_signal();
+
 	g_array_set_size(paste_buffer, 0);
 
 	gui_entry_set_prompt(active_entry,
@@ -351,6 +379,7 @@ static void insert_paste_prompt(void)
 	paste_entry_pos = gui_entry_get_pos(active_entry);
 	gui_entry_set_text(active_entry, "");
 	g_free(str);
+	signal_emit("gui paste detected", 1, paste_line_count);
 }
 
 static void sig_gui_key_pressed(gpointer keyp)
@@ -647,8 +676,10 @@ static void sig_input(void)
 		unichar key;
 		term_gets(buffer, &line_count);
 		key = g_array_index(buffer, unichar, 0);
-		if (key == 11 || key == 3)
-			paste_flush(key == 11);
+		if (key == 11 || key == 3 || key == 15 || key == 16) {
+			/* 15 (^O) and 16 (^P) can be used by a script */
+			paste_flush(key == 11 ? TRUE : key == 3 ? FALSE : key);
+		}
 		g_array_free(buffer, TRUE);
 	} else {
 		term_gets(paste_buffer, &paste_line_count);

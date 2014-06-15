@@ -330,6 +330,8 @@ Text FE
 
 gui-readline.c:
  "gui key pressed", int key
+ "gui paste detected", int lines
+ "gui paste flush", int key, char *paste_buffer
 
 gui-printtext.c:
  "beep"
